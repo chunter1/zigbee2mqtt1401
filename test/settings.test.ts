@@ -1,8 +1,8 @@
 // side-effect ensures using mock paths
+import {beforeEach, describe, expect, it} from "vitest";
 import "./mocks/data";
 
 import fs from "node:fs";
-
 import yaml from "js-yaml";
 import objectAssignDeep from "object-assign-deep";
 
@@ -165,6 +165,43 @@ describe("Settings", () => {
         writeAndCheck();
     });
 
+    it("Should apply Home Assistant environment variables", () => {
+        // should be kept in sync with envs in https://github.com/zigbee2mqtt/hassio-zigbee2mqtt/blob/master/common/rootfs/docker-entrypoint.sh
+        process.env.ZIGBEE2MQTT_CONFIG_FRONTEND_ENABLED = "true";
+        process.env.ZIGBEE2MQTT_CONFIG_FRONTEND_PORT = "8099";
+        process.env.ZIGBEE2MQTT_CONFIG_HOMEASSISTANT_ENABLED = "true";
+        process.env.ZIGBEE2MQTT_CONFIG_SERIAL_PORT =
+            "/dev/serial/by-id/usb-ITead_Sonoff_Zigbee_3.0_USB_Dongle_Plus_48be7a7468d8ed11bfea786ff2c613ac-if00-port0";
+        process.env.ZIGBEE2MQTT_CONFIG_MQTT_SERVER = "mqtt://core-mosquitto:1883";
+        process.env.ZIGBEE2MQTT_CONFIG_MQTT_USER = "addons";
+        process.env.ZIGBEE2MQTT_CONFIG_MQTT_PASSWORD = "7RbR4NBSskS8TKG4ugzdRilXw6TPQ4NKFs259j2DxeultOFtl5JwciNZFd6feT5o";
+
+        write(configurationFile, {});
+
+        // @ts-expect-error workaround
+        const expected = objectAssignDeep.noMutate({}, settings.testing.defaults);
+        expected.frontend.enabled = true;
+        expected.frontend.port = 8099;
+        expected.homeassistant.enabled = true;
+        expected.serial.port = "/dev/serial/by-id/usb-ITead_Sonoff_Zigbee_3.0_USB_Dongle_Plus_48be7a7468d8ed11bfea786ff2c613ac-if00-port0";
+        expected.mqtt.server = "mqtt://core-mosquitto:1883";
+        expected.mqtt.user = "addons";
+        expected.mqtt.password = "7RbR4NBSskS8TKG4ugzdRilXw6TPQ4NKFs259j2DxeultOFtl5JwciNZFd6feT5o";
+        expected.devices = {};
+        expected.groups = {};
+
+        const writeAndCheck = (): void => {
+            expect(settings.write()); // trigger writing of ENVs
+            expect(settings.validate()).toStrictEqual([]);
+            expect(settings.get()).toStrictEqual(expected);
+        };
+
+        // Write trice to ensure there are no side effects.
+        writeAndCheck();
+        writeAndCheck();
+        writeAndCheck();
+    });
+
     it("Should write environment variables as overrides to configuration.yaml, not in the ref file", () => {
         write(secretFile, {password: "password-in-secret-file"}, false);
         write(configurationFile, {mqtt: {password: "!secret password", server: "server"}});
@@ -275,6 +312,9 @@ describe("Settings", () => {
             base_topic: "zigbee2mqtt",
             include_device_information: false,
             maximum_packet_size: 1048576,
+            keepalive: 60,
+            reject_unauthorized: true,
+            version: 4,
             force_disable_retain: false,
             password: "mysecretpassword",
             server: "my.mqtt.server",
@@ -320,6 +360,9 @@ describe("Settings", () => {
             base_topic: "zigbee2mqtt",
             include_device_information: false,
             maximum_packet_size: 1048576,
+            keepalive: 60,
+            reject_unauthorized: true,
+            version: 4,
             force_disable_retain: false,
             password: "mysecretpassword",
             server: "my.mqtt.server",
@@ -638,6 +681,9 @@ describe("Settings", () => {
             base_topic: "zigbee2mqtt",
             include_device_information: false,
             maximum_packet_size: 1048576,
+            keepalive: 60,
+            reject_unauthorized: true,
+            version: 4,
             force_disable_retain: false,
             server: "my.mqtt.server",
             user: "myusername",
@@ -801,25 +847,6 @@ describe("Settings", () => {
         expect(settings.get().blocklist).toStrictEqual(["0x123", "0x1234"]);
     });
 
-    it("Should throw error when yaml file is invalid", () => {
-        fs.writeFileSync(
-            configurationFile,
-            `
-             good: 9
-             \t wrong
-        `,
-        );
-
-        settings.testing.clear();
-        const error = `Your YAML file: '${configurationFile}' is invalid (use https://jsonformatter.org/yaml-validator to find and fix the issue)`;
-        expect(settings.validate()).toEqual(expect.arrayContaining([error]));
-    });
-
-    it("Should throw error when yaml file does not exist", () => {
-        settings.testing.clear();
-        expect(settings.validate()[0]).toContain("ENOENT: no such file or directory, open ");
-    });
-
     it("Configuration shouldnt be valid when invalid QOS value is used", () => {
         write(configurationFile, {
             ...minimalConfig,
@@ -828,7 +855,7 @@ describe("Settings", () => {
 
         settings.reRead();
 
-        const error = `QOS for 'myname' not valid, should be 0, 1 or 2 got 3`;
+        const error = "devices/0x0017880104e45519/qos must be equal to one of the allowed values";
         expect(settings.validate()).toEqual(expect.arrayContaining([error]));
     });
 

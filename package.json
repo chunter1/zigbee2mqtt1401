@@ -1,6 +1,6 @@
 {
     "name": "zigbee2mqtt",
-    "version": "2.5.0",
+    "version": "2.6.0",
     "description": "Zigbee to MQTT bridge using Zigbee-herdsman",
     "main": "index.js",
     "types": "dist/types/api.d.ts",
@@ -31,6 +31,7 @@
         "test": "vitest run --config ./test/vitest.config.mts",
         "test:coverage": "vitest run --config ./test/vitest.config.mts --coverage",
         "test:watch": "vitest watch --config ./test/vitest.config.mts",
+        "bench": "vitest bench --run --config ./test/vitest.config.mts",
         "prepack": "pnpm run clean && pnpm run build",
         "clean": "rimraf coverage dist tsconfig.tsbuildinfo"
     },
@@ -62,13 +63,14 @@
         "winston-syslog": "^2.7.1",
         "winston-transport": "^4.9.0",
         "ws": "^8.18.1",
-        "zigbee-herdsman": "4.3.0",
-        "zigbee-herdsman-converters": "23.69.0",
-        "zigbee2mqtt-frontend": "0.9.16",
-        "zigbee2mqtt-windfront": "^1.1.0"
+        "zigbee-herdsman": "5.0.4",
+        "zigbee-herdsman-converters": "24.11.0",
+        "zigbee2mqtt-frontend": "0.9.19",
+        "zigbee2mqtt-windfront": "^1.5.2"
     },
     "devDependencies": {
         "@biomejs/biome": "^2.0.5",
+        "@codspeed/vitest-plugin": "^4.0.1",
         "@types/finalhandler": "^1.2.3",
         "@types/humanize-duration": "^3.27.4",
         "@types/js-yaml": "^4.0.9",

@@ -1,4 +1,5 @@
 // biome-ignore assist/source/organizeImports: import mocks first
+import {afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi} from "vitest";
 import * as data from "./mocks/data";
 import {mockLogger} from "./mocks/logger";
 import {
@@ -55,7 +56,6 @@ describe("Controller", () => {
     let mockExit: Mock;
 
     const getZ2MDevice = (zhDevice: string | number | ZhDevice): Device => {
-        // @ts-expect-error private
         return controller.zigbee.resolveEntity(zhDevice)! as Device;
     };
 
@@ -112,6 +112,8 @@ describe("Controller", () => {
         expect(mockMQTTConnectAsync).toHaveBeenCalledWith("mqtt://localhost", {
             will: {payload: Buffer.from('{"state":"offline"}'), retain: true, topic: "zigbee2mqtt/bridge/state", qos: 1},
             properties: {maximumPacketSize: 1048576},
+            keepalive: 60,
+            protocolVersion: 4,
         });
         expect(mockMQTTPublishAsync).toHaveBeenCalledWith(
             "zigbee2mqtt/bulb",
@@ -293,11 +295,9 @@ describe("Controller", () => {
         await controller.start();
         await flushPromises();
         mockMQTTPublishAsync.mockClear();
-        // @ts-expect-error private
         await controller.mqtt.publish("z2m/#/status", "empty");
         expect(mockMQTTPublishAsync).toHaveBeenCalledTimes(0);
         expect(mockLogger.error).toHaveBeenCalledWith(`Topic 'z2m/#/status' includes wildcard characters, skipping publish.`);
-        // @ts-expect-error private
         await controller.mqtt.publish("z2m/+/status", "empty");
         expect(mockMQTTPublishAsync).toHaveBeenCalledTimes(0);
         expect(mockLogger.error).toHaveBeenCalledWith(`Topic 'z2m/+/status' includes wildcard characters, skipping publish.`);
@@ -410,14 +410,15 @@ describe("Controller", () => {
     });
 
     it("Start controller adapter disconnects", async () => {
-        mockZHController.stop.mockRejectedValueOnce("failed");
+        // Fail to stop extension exit code 1 should not override adapter disconnect exit code 2
+        vi.spyOn(Array.from(controller.extensions)[0], "stop").mockRejectedValueOnce(new Error("failed"));
         await controller.start();
         await mockZHEvents.adapterDisconnected();
         await flushPromises();
         expect(mockMQTTEndAsync).toHaveBeenCalledTimes(1);
         expect(mockZHController.stop).toHaveBeenCalledTimes(1);
         expect(mockExit).toHaveBeenCalledTimes(1);
-        expect(mockExit).toHaveBeenCalledWith(1, false);
+        expect(mockExit).toHaveBeenCalledWith(2, false);
     });
 
     it("does not throw when extension fails to stop on controller stop", async () => {
@@ -500,7 +501,6 @@ describe("Controller", () => {
     });
 
     it("Handle mqtt message", async () => {
-        // @ts-expect-error private
         const spyEventbusEmitMQTTMessage = vi.spyOn(controller.eventBus, "emitMQTTMessage").mockImplementation(vi.fn());
 
         await controller.start();
@@ -511,7 +511,6 @@ describe("Controller", () => {
     });
 
     it("Skip MQTT messages on topic we published to", async () => {
-        // @ts-expect-error private
         const spyEventbusEmitMQTTMessage = vi.spyOn(controller.eventBus, "emitMQTTMessage").mockImplementation(vi.fn());
 
         await controller.start();
@@ -519,7 +518,6 @@ describe("Controller", () => {
         await mockMQTTEvents.message("zigbee2mqtt/skip-this-topic", "skipped");
         expect(spyEventbusEmitMQTTMessage).toHaveBeenCalledWith({topic: "zigbee2mqtt/skip-this-topic", message: "skipped"});
         mockLogger.debug.mockClear();
-        // @ts-expect-error private
         await controller.mqtt.publish("skip-this-topic", "", {});
         await mockMQTTEvents.message("zigbee2mqtt/skip-this-topic", "skipped");
         expect(mockLogger.debug).toHaveBeenCalledTimes(0);
@@ -841,13 +839,11 @@ describe("Controller", () => {
         mockMQTTPublishAsync.mockClear();
 
         const device = getZ2MDevice("bulb");
-        // @ts-expect-error private
         expect(controller.state.get(device)).toStrictEqual({brightness: 50, color_temp: 370, linkquality: 99, state: "ON"});
 
         await controller.publishEntityState(device, {state: "ON", brightness: 200, color_temp: 370, linkquality: 87});
         await flushPromises();
 
-        // @ts-expect-error private
         expect(controller.state.get(device)).toStrictEqual({brightness: 200, color_temp: 370, state: "ON"});
         expect(mockMQTTPublishAsync).toHaveBeenCalledTimes(5);
         expect(mockMQTTPublishAsync).toHaveBeenCalledWith("zigbee2mqtt/bulb/state", "ON", {qos: 0, retain: true});
@@ -867,13 +863,11 @@ describe("Controller", () => {
         mockMQTTPublishAsync.mockClear();
 
         const device = getZ2MDevice("bulb");
-        // @ts-expect-error private
         expect(controller.state.get(device)).toStrictEqual({brightness: 50, color_temp: 370, linkquality: 99, state: "ON"});
 
         await controller.publishEntityState(device, {state: "ON", brightness: 200, color_temp: 370, linkquality: 87});
         await flushPromises();
 
-        // @ts-expect-error private
         expect(controller.state.get(device)).toStrictEqual({brightness: 200, color_temp: 370, state: "ON"});
         expect(mockMQTTPublishAsync).toHaveBeenCalledTimes(5);
         expect(mockMQTTPublishAsync).toHaveBeenCalledWith("zigbee2mqtt/bulb/state", "ON", {qos: 0, retain: true});
@@ -1045,6 +1039,8 @@ describe("Controller", () => {
         expect(mockMQTTConnectAsync).toHaveBeenCalledTimes(1);
         const expected = {
             will: {payload: Buffer.from('{"state":"offline"}'), retain: false, topic: "zigbee2mqtt/bridge/state", qos: 1},
+            keepalive: 60,
+            protocolVersion: 4,
             properties: {maximumPacketSize: 1048576},
         };
         expect(mockMQTTConnectAsync).toHaveBeenCalledWith("mqtt://localhost", expected);
@@ -1054,10 +1050,7 @@ describe("Controller", () => {
         await controller.start();
         await flushPromises();
 
-        const retainedMessages = Object.keys(
-            // @ts-expect-error private
-            controller.mqtt.retainedMessages,
-        ).length;
+        const retainedMessages = Object.keys(controller.mqtt.retainedMessages).length;
 
         mockMQTTPublishAsync.mockClear();
         await vi.advanceTimersByTimeAsync(2500); // before any startup configure triggers
@@ -1078,7 +1071,6 @@ describe("Controller", () => {
 
     it("Should prevent any message being published with retain flag when force_disable_retain is set", async () => {
         settings.set(["mqtt", "force_disable_retain"], true);
-        // @ts-expect-error private
         await controller.mqtt.connect();
         mockMQTTPublishAsync.mockClear();
         // @ts-expect-error private
@@ -1136,7 +1128,6 @@ describe("Controller", () => {
     it("Should remove state of removed device when stopped", async () => {
         await controller.start();
         const device = getZ2MDevice("bulb");
-        // @ts-expect-error private
         expect(controller.state.get(device)).toStrictEqual({brightness: 50, color_temp: 370, linkquality: 99, state: "ON"});
         device.zh.isDeleted = true;
         await controller.stop();
@@ -1145,7 +1136,6 @@ describe("Controller", () => {
     });
 
     it("EventBus should handle sync errors", async () => {
-        // @ts-expect-error private
         const eventbus = controller.eventBus;
         const callback = vi.fn().mockImplementation(() => {
             throw new Error("Whoops!");
@@ -1158,7 +1148,6 @@ describe("Controller", () => {
     });
 
     it("EventBus should handle async errors", async () => {
-        // @ts-expect-error private
         const eventbus = controller.eventBus;
         const callback = vi.fn().mockRejectedValue(new Error("Whoops!"));
         eventbus.onStateChange({constructor: {name: "Test"}}, callback);

@@ -1,4 +1,5 @@
 // biome-ignore assist/source/organizeImports: import mocks first
+import {afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi} from "vitest";
 import * as data from "../mocks/data";
 import {mockLogger} from "../mocks/logger";
 import {events as mockMQTTEvents, mockMQTTPublishAsync} from "../mocks/mqtt";
@@ -485,5 +486,18 @@ describe("Extension: Frontend", () => {
         await controller.enableDisableExtension(false, "Frontend");
 
         await vi.waitFor(() => controller.getExtension("Frontend") === undefined);
+    });
+
+    it("disables serving", async () => {
+        settings.set(["frontend", "disable_ui_serving"], true);
+        controller = new Controller(vi.fn(), vi.fn());
+        await controller.start();
+
+        expect(mockHTTP.listen).toHaveBeenCalledTimes(0);
+        mockWS.clients.push(mockWSClient);
+        await controller.stop();
+        expect(mockWSClient.terminate).toHaveBeenCalledTimes(1);
+        expect(mockHTTP.close).toHaveBeenCalledTimes(0);
+        expect(mockWS.close).toHaveBeenCalledTimes(1);
     });
 });

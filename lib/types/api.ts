@@ -151,6 +151,7 @@ export interface Zigbee2MQTTSettings {
         ssl_cert?: string;
         ssl_key?: string;
         notification_filter?: string[];
+        disable_ui_serving?: boolean;
     };
     devices: {[s: string]: Zigbee2MQTTDeviceOptions};
     groups: {[s: string]: Omit<Zigbee2MQTTGroupOptions, "ID">};
@@ -196,6 +197,7 @@ export interface Zigbee2MQTTScene {
 }
 
 export interface Zigbee2MQTTDeviceEndpoint {
+    name?: string;
     bindings: Zigbee2MQTTDeviceEndpointBinding[];
     configured_reportings: Zigbee2MQTTDeviceEndpointConfiguredReporting[];
     clusters: {input: string[]; output: string[]};
@@ -218,6 +220,7 @@ export interface Zigbee2MQTTDeviceEndpointConfiguredReporting {
 }
 
 export interface Zigbee2MQTTDeviceDefinition {
+    source: "native" | "generated" | "external";
     model: string;
     vendor: string;
     description: string;
