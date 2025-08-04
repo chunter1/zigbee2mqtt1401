@@ -4,7 +4,6 @@
   "slug": "zigbee2mqtt_edge",
   "description": "Development build of the Zigbee2MQTT add-on",
   "uart": true,
-  "udev": true,
   "url": "https://github.com/zigbee2mqtt/hassio-zigbee2mqtt/tree/master/zigbee2mqtt-edge",
   "startup": "application",
   "services": [
@@ -23,20 +22,8 @@
   "timeout": 30,
   "panel_icon": "mdi:zigbee",
   "map": [
-    {
-      "type": "share",
-      "read_only": false
-    },
-    {
-      "type": "homeassistant_config",
-      "read_only": false,
-      "path": "/config"
-    },
-    {
-      "type": "addon_config",
-      "read_only": false,
-      "path": "/addon_config"
-    }
+    "share:rw",
+    "config:rw"
   ],
   "ports": {
     "8485/tcp": 8485,
@@ -78,7 +65,7 @@
     },
     "serial": {
       "port": "str?",
-      "adapter": "match(zstack|deconz|zigate|ezsp|ember|zboss)?",
+      "adapter": "match(zstack|deconz|zigate|ezsp|ember)?",
       "baudrate": "int?",
       "rtscts": "bool?"
     },
