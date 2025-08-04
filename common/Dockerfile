@@ -33,9 +33,8 @@ RUN apk add --no-cache --virtual .buildtools npm make gcc g++ linux-headers udev
     pnpm run build && \
     rm -rf node_modules && \
     pnpm install --frozen-lockfile --no-optional --unsafe-perm --prod && \
-    # serialport has outdated prebuilds that appear to fail on some archs, force build on target platform
-    rm -rf `find ./node_modules/.pnpm/ -wholename "*/@serialport/bindings-cpp/prebuilds" -type d` && \
-    pnpm rebuild @serialport/bindings-cpp
+    # Serialport needs to be rebuild for Alpine https://serialport.io/docs/9.x.x/guide-installation#alpine-linux
+    pnpm rebuild
 
 # Release
 FROM base as release
