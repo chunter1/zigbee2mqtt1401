@@ -1,12 +1,22 @@
+import type {Zigbee2MQTTAPI, Zigbee2MQTTResponse, Zigbee2MQTTResponseEndpoints, Zigbee2MQTTScene} from 'lib/types/api';
 import type * as zhc from 'zigbee-herdsman-converters';
 
+import assert from 'node:assert';
+import crypto from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
+
 import equals from 'fast-deep-equal/es6';
-import fs from 'fs';
 import humanizeDuration from 'humanize-duration';
-import path from 'path';
-import vm from 'vm';
 
 import data from './data';
+
+const BASE64_IMAGE_REGEX = new RegExp(`data:image/(?<extension>.+);base64,(?<data>.+)`);
+
+function pad(num: number): string {
+    const norm = Math.floor(Math.abs(num));
+    return (norm < 10 ? '0' : '') + norm;
+}
 
 // construct a local ISO8601 string (instead of UTC-based)
 // Example:
@@ -15,10 +25,6 @@ import data from './data';
 function toLocalISOString(date: Date): string {
     const tzOffset = -date.getTimezoneOffset();
     const plusOrMinus = tzOffset >= 0 ? '+' : '-';
-    const pad = (num: number): string => {
-        const norm = Math.floor(Math.abs(num));
-        return (norm < 10 ? '0' : '') + norm;
-    };
 
     return (
         date.getFullYear() +
@@ -43,27 +49,28 @@ function capitalize(s: string): string {
     return s[0].toUpperCase() + s.slice(1);
 }
 
-async function getZigbee2MQTTVersion(includeCommitHash = true): Promise<{commitHash: string; version: string}> {
+async function getZigbee2MQTTVersion(includeCommitHash = true): Promise<{commitHash?: string; version: string}> {
     const git = await import('git-last-commit');
     const packageJSON = await import('../..' + '/package.json');
 
     if (!includeCommitHash) {
-        return {version: packageJSON.version, commitHash: null};
+        return {version: packageJSON.version, commitHash: undefined};
     }
 
-    return new Promise((resolve) => {
+    return await new Promise((resolve) => {
         const version = packageJSON.version;
 
         git.getLastCommit((err: Error, commit: {shortHash: string}) => {
-            let commitHash = null;
+            let commitHash = undefined;
 
             if (err) {
                 try {
                     commitHash = fs.readFileSync(path.join(__dirname, '..', '..', 'dist', '.hash'), 'utf-8');
+                    /* v8 ignore start */
                 } catch {
-                    /* istanbul ignore next */
                     commitHash = 'unknown';
                 }
+                /* v8 ignore stop */
             } else {
                 commitHash = commit.shortHash;
             }
@@ -75,10 +82,8 @@ async function getZigbee2MQTTVersion(includeCommitHash = true): Promise<{commitH
 }
 
 async function getDependencyVersion(depend: string): Promise<{version: string}> {
-    const modulePath = path.dirname(require.resolve(depend));
-    const packageJSONPath = path.join(modulePath.slice(0, modulePath.indexOf(depend) + depend.length), 'package.json');
-    const packageJSON = await import(packageJSONPath);
-    const version = packageJSON.version;
+    const packageJsonPath = require.resolve(`${depend}/package.json`);
+    const version = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8')).version;
     return {version};
 }
 
@@ -100,7 +105,7 @@ function objectIsEmpty(object: object): boolean {
 
 function objectHasProperties(object: {[s: string]: unknown}, properties: string[]): boolean {
     for (const property of properties) {
-        if (!object.hasOwnProperty(property)) {
+        if (object[property] === undefined) {
             return false;
         }
     }
@@ -118,17 +123,39 @@ function equalsPartial(object: KeyValue, expected: KeyValue): boolean {
     return true;
 }
 
-function getObjectProperty(object: KeyValue, key: string, defaultValue: unknown): unknown {
-    return object && object.hasOwnProperty(key) ? object[key] : defaultValue;
+function getObjectProperty<T>(object: KeyValue, key: string, defaultValue: NoInfer<T>): T {
+    return object && object[key] !== undefined ? object[key] : defaultValue;
 }
 
-function getResponse(request: KeyValue | string, data: KeyValue, error: string): MQTTResponse {
-    const response: MQTTResponse = {data, status: error ? 'error' : 'ok'};
-    if (error) response.error = error;
-    if (typeof request === 'object' && request.hasOwnProperty('transaction')) {
-        response.transaction = request.transaction;
+function getResponse<T extends Zigbee2MQTTResponseEndpoints>(
+    request: KeyValue | string,
+    data: Zigbee2MQTTAPI[T],
+    error?: string,
+): Zigbee2MQTTResponse<T> {
+    if (error !== undefined) {
+        const response: Zigbee2MQTTResponse<T> = {
+            data: {}, // always return an empty `data` payload on error
+            status: 'error',
+            error: error,
+        };
+
+        if (typeof request === 'object' && request.transaction !== undefined) {
+            response.transaction = request.transaction;
+        }
+
+        return response;
+    } else {
+        const response: Zigbee2MQTTResponse<T> = {
+            data, // valid from error check
+            status: 'ok',
+        };
+
+        if (typeof request === 'object' && request.transaction !== undefined) {
+            response.transaction = request.transaction;
+        }
+
+        return response;
     }
-    return response;
 }
 
 function parseJSON(value: string, fallback: string): KeyValue | string {
@@ -136,48 +163,6 @@ function parseJSON(value: string, fallback: string): KeyValue | string {
         return JSON.parse(value);
     } catch {
         return fallback;
-    }
-}
-
-function loadModuleFromText(moduleCode: string, name?: string): unknown {
-    const moduleFakePath = path.join(__dirname, '..', '..', 'data', 'extension', name || 'externally-loaded.js');
-    const sandbox = {
-        require: require,
-        module: {},
-        console,
-        setTimeout,
-        clearTimeout,
-        setInterval,
-        clearInterval,
-        setImmediate,
-        clearImmediate,
-    };
-    vm.runInNewContext(moduleCode, sandbox, moduleFakePath);
-    /* eslint-disable-line */ // @ts-ignore
-    return sandbox.module.exports;
-}
-
-function loadModuleFromFile(modulePath: string): unknown {
-    const moduleCode = fs.readFileSync(modulePath, {encoding: 'utf8'});
-    return loadModuleFromText(moduleCode);
-}
-
-export function* loadExternalConverter(moduleName: string): Generator<ExternalDefinition> {
-    let converter;
-
-    if (moduleName.endsWith('.js')) {
-        converter = loadModuleFromFile(data.joinPath(moduleName));
-    } else {
-        // eslint-disable-next-line @typescript-eslint/no-require-imports
-        converter = require(moduleName);
-    }
-
-    if (Array.isArray(converter)) {
-        for (const item of converter) {
-            yield item;
-        }
-    } else {
-        yield converter;
     }
 }
 
@@ -189,8 +174,12 @@ export function* loadExternalConverter(moduleName: string): Generator<ExternalDe
  */
 function removeNullPropertiesFromObject(obj: KeyValue, ignoreKeys: string[] = []): void {
     for (const key of Object.keys(obj)) {
-        if (ignoreKeys.includes(key)) continue;
+        if (ignoreKeys.includes(key)) {
+            continue;
+        }
+
         const value = obj[key];
+
         if (value == null) {
             delete obj[key];
         } else if (typeof value === 'object') {
@@ -202,26 +191,6 @@ function removeNullPropertiesFromObject(obj: KeyValue, ignoreKeys: string[] = []
 function toNetworkAddressHex(value: number): string {
     const hex = value.toString(16);
     return `0x${'0'.repeat(4 - hex.length)}${hex}`;
-}
-
-// eslint-disable-next-line
-function toSnakeCase(value: string | KeyValue): any {
-    if (typeof value === 'object') {
-        value = {...value};
-        for (const key of Object.keys(value)) {
-            const keySnakeCase = toSnakeCase(key);
-            if (key !== keySnakeCase) {
-                value[keySnakeCase] = value[key];
-                delete value[key];
-            }
-        }
-        return value;
-    } else {
-        return value
-            .replace(/\.?([A-Z])/g, (x, y) => '_' + y.toLowerCase())
-            .replace(/^_/, '')
-            .replace('_i_d', '_id');
-    }
 }
 
 function charRange(start: string, stop: string): number[] {
@@ -299,32 +268,19 @@ function isAvailabilityEnabledForEntity(entity: Device | Group, settings: Settin
         return !!entity.options.availability;
     }
 
-    // availability_timeout = deprecated
-    if (!(settings.advanced.availability_timeout || settings.availability)) {
+    if (!settings.availability.enabled) {
         return false;
-    }
-
-    const passlist = settings.advanced.availability_passlist.concat(settings.advanced.availability_whitelist);
-
-    if (passlist.length > 0) {
-        return passlist.includes(entity.name) || passlist.includes(entity.ieeeAddr);
-    }
-
-    const blocklist = settings.advanced.availability_blacklist.concat(settings.advanced.availability_blocklist);
-
-    if (blocklist.length > 0) {
-        return !blocklist.includes(entity.name) && !blocklist.includes(entity.ieeeAddr);
     }
 
     return true;
 }
 
-function isEndpoint(obj: unknown): obj is zh.Endpoint {
-    return obj.constructor.name.toLowerCase() === 'endpoint';
+function isZHEndpoint(obj: unknown): obj is zh.Endpoint {
+    return obj?.constructor.name.toLowerCase() === 'endpoint';
 }
 
 function flatten<Type>(arr: Type[][]): Type[] {
-    return [].concat(...arr);
+    return ([] as Type[]).concat(...arr);
 }
 
 function arrayUnique<Type>(arr: Type[]): Type[] {
@@ -332,11 +288,7 @@ function arrayUnique<Type>(arr: Type[]): Type[] {
 }
 
 function isZHGroup(obj: unknown): obj is zh.Group {
-    return obj.constructor.name.toLowerCase() === 'group';
-}
-
-function availabilityPayload(state: 'online' | 'offline', settings: Settings): string {
-    return settings.advanced.legacy_availability_payload ? state : JSON.stringify({state});
+    return obj?.constructor.name.toLowerCase() === 'group';
 }
 
 const hours = (hours: number): number => 1000 * 60 * 60 * hours;
@@ -362,7 +314,7 @@ async function publishLastSeen(
     }
 }
 
-function filterProperties(filter: string[], data: KeyValue): void {
+function filterProperties(filter: string[] | undefined, data: KeyValue): void {
     if (filter) {
         for (const property of Object.keys(data)) {
             if (filter.find((p) => property.match(`^${p}$`))) {
@@ -372,22 +324,38 @@ function filterProperties(filter: string[], data: KeyValue): void {
     }
 }
 
-export function isNumericExposeFeature(feature: zhc.Expose): feature is zhc.Numeric {
-    return feature?.type === 'numeric';
+export function isNumericExpose(expose: zhc.Expose): expose is zhc.Numeric {
+    return expose?.type === 'numeric';
 }
 
-export function isEnumExposeFeature(feature: zhc.Expose): feature is zhc.Enum {
-    return feature?.type === 'enum';
+export function assertEnumExpose(expose: zhc.Expose): asserts expose is zhc.Enum {
+    assert(expose?.type === 'enum');
 }
 
-export function isBinaryExposeFeature(feature: zhc.Expose): feature is zhc.Binary {
-    return feature?.type === 'binary';
+export function assertNumericExpose(expose: zhc.Expose): asserts expose is zhc.Numeric {
+    assert(expose?.type === 'numeric');
 }
 
-function getScenes(entity: zh.Endpoint | zh.Group): Scene[] {
-    const scenes: {[id: number]: Scene} = {};
-    const endpoints = isEndpoint(entity) ? [entity] : entity.members;
-    const groupID = isEndpoint(entity) ? 0 : entity.groupID;
+export function assertBinaryExpose(expose: zhc.Expose): asserts expose is zhc.Binary {
+    assert(expose?.type === 'binary');
+}
+
+export function isEnumExpose(expose: zhc.Expose): expose is zhc.Enum {
+    return expose?.type === 'enum';
+}
+
+export function isBinaryExpose(expose: zhc.Expose): expose is zhc.Binary {
+    return expose?.type === 'binary';
+}
+
+export function isLightExpose(expose: zhc.Expose): expose is zhc.Light {
+    return expose.type === 'light';
+}
+
+function getScenes(entity: zh.Endpoint | zh.Group): Zigbee2MQTTScene[] {
+    const scenes: {[id: number]: Zigbee2MQTTScene} = {};
+    const endpoints = isZHEndpoint(entity) ? [entity] : entity.members;
+    const groupID = isZHEndpoint(entity) ? 0 : entity.groupID;
 
     for (const endpoint of endpoints) {
         for (const [key, data] of Object.entries(endpoint.meta?.scenes || {})) {
@@ -407,10 +375,32 @@ function deviceNotCoordinator(device: zh.Device): boolean {
     return device.type !== 'Coordinator';
 }
 
-/* istanbul ignore next */
+function matchBase64File(value: string | undefined): {extension: string; data: string} | false {
+    if (value !== undefined) {
+        const match = value.match(BASE64_IMAGE_REGEX);
+        if (match) {
+            assert(match.groups?.extension && match.groups?.data);
+            return {extension: match.groups.extension, data: match.groups.data};
+        }
+    }
+    return false;
+}
+
+function saveBase64DeviceIcon(base64Match: {extension: string; data: string}): string {
+    const md5Hash = crypto.createHash('md5').update(base64Match.data).digest('hex');
+    const fileSettings = `device_icons/${md5Hash}.${base64Match.extension}`;
+    const file = path.join(data.getPath(), fileSettings);
+    fs.mkdirSync(path.dirname(file), {recursive: true});
+    fs.writeFileSync(file, base64Match.data, {encoding: 'base64'});
+    return fileSettings;
+}
+
+/* v8 ignore next */
 const noop = (): void => {};
 
 export default {
+    matchBase64File,
+    saveBase64DeviceIcon,
     capitalize,
     getZigbee2MQTTVersion,
     getDependencyVersion,
@@ -421,12 +411,9 @@ export default {
     getObjectProperty,
     getResponse,
     parseJSON,
-    loadModuleFromText,
-    loadModuleFromFile,
     removeNullPropertiesFromObject,
     toNetworkAddressHex,
-    toSnakeCase,
-    isEndpoint,
+    isZHEndpoint,
     isZHGroup,
     hours,
     minutes,
@@ -436,7 +423,6 @@ export default {
     sanitizeImageParameter,
     isAvailabilityEnabledForEntity,
     publishLastSeen,
-    availabilityPayload,
     getAllFiles,
     filterProperties,
     flatten,

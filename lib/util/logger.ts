@@ -1,8 +1,8 @@
-import assert from 'assert';
-import fs from 'fs';
-import fx from 'mkdir-recursive';
+import assert from 'node:assert';
+import fs from 'node:fs';
+import path from 'node:path';
+
 import moment from 'moment';
-import path from 'path';
 import {rimrafSync} from 'rimraf';
 import winston from 'winston';
 
@@ -11,13 +11,20 @@ import * as settings from './settings';
 const NAMESPACE_SEPARATOR = ':';
 
 class Logger {
+    // @ts-expect-error initalized in `init`
     private level: settings.LogLevel;
+    // @ts-expect-error initalized in `init`
     private output: string[];
+    // @ts-expect-error initalized in `init`
     private directory: string;
+    // @ts-expect-error initalized in `init`
     private logger: winston.Logger;
+    // @ts-expect-error initalized in `init`
     private fileTransport: winston.transports.FileTransportInstance;
     private debugNamespaceIgnoreRegex?: RegExp;
+    // @ts-expect-error initalized in `init`
     private namespacedLevels: Record<string, settings.LogLevel>;
+    // @ts-expect-error initalized in `init`
     private cachedNamespacedLevels: Record<string, settings.LogLevel>;
 
     public init(): void {
@@ -52,11 +59,9 @@ class Logger {
                 // winston.config.syslog.levels sets 'warning' as 'red'
                 format: winston.format.combine(
                     winston.format.colorize({colors: {debug: 'blue', info: 'green', warning: 'yellow', error: 'red'}}),
-                    winston.format.printf(
-                        /* istanbul ignore next */ (info) => {
-                            return `[${info.timestamp}] ${info.level}: \t${info.message}`;
-                        },
-                    ),
+                    winston.format.printf((info) => {
+                        return `[${info.timestamp}] ${info.level}: \t${info.message}`;
+                    }),
                 ),
             }),
         );
@@ -65,15 +70,18 @@ class Logger {
             logging += `, file (filename: ${logFilename})`;
 
             // Make sure that log directory exists when not logging to stdout only
-            fx.mkdirSync(this.directory);
+            fs.mkdirSync(this.directory, {recursive: true});
 
             if (settings.get().advanced.log_symlink_current) {
                 const current = settings.get().advanced.log_directory.replace('%TIMESTAMP%', 'current');
                 const actual = './' + timestamp;
-                /* istanbul ignore next */
+
+                /* v8 ignore start */
                 if (fs.existsSync(current)) {
                     fs.unlinkSync(current);
                 }
+                /* v8 ignore stop */
+
                 fs.symlinkSync(actual, current);
             }
 
@@ -81,11 +89,9 @@ class Logger {
             // NOTE: the initiation of the logger even when not added as transport tries to create the logging directory
             const transportFileOptions: winston.transports.FileTransportOptions = {
                 filename: path.join(this.directory, logFilename),
-                format: winston.format.printf(
-                    /* istanbul ignore next */ (info) => {
-                        return `[${info.timestamp}] ${info.level}: \t${info.message}`;
-                    },
-                ),
+                format: winston.format.printf((info) => {
+                    return `[${info.timestamp}] ${info.level}: \t${info.message}`;
+                }),
             };
 
             if (settings.get().advanced.log_rotation) {
@@ -96,27 +102,29 @@ class Logger {
 
             this.fileTransport = new winston.transports.File(transportFileOptions);
             this.logger.add(this.fileTransport);
+            this.cleanup();
         }
 
-        /* istanbul ignore next */
+        /* v8 ignore start */
         if (this.output.includes('syslog')) {
             logging += `, syslog`;
-            // eslint-disable-next-line
+            // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-unused-expressions
             require('winston-syslog').Syslog;
 
             const options: KeyValue = {
                 app_name: 'Zigbee2MQTT',
-                format: winston.format.printf((info) => info.message),
+                format: winston.format.printf((info) => info.message as string),
                 ...settings.get().advanced.log_syslog,
             };
 
-            if (options.hasOwnProperty('type')) {
+            if (options['type'] !== undefined) {
                 options.type = options.type.toString();
             }
 
             // @ts-expect-error untyped transport
             this.logger.add(new winston.transports.Syslog(options));
         }
+        /* v8 ignore stop */
 
         this.setDebugNamespaceIgnore(settings.get().advanced.log_debug_namespace_ignore);
 
@@ -182,36 +190,37 @@ class Logger {
         return this.cachedNamespacedLevels[namespace];
     }
 
-    private log(level: settings.LogLevel, message: string, namespace: string): void {
+    private log(level: settings.LogLevel, messageOrLambda: string | (() => string), namespace: string): void {
         const nsLevel = this.cacheNamespacedLevel(namespace);
 
         if (settings.LOG_LEVELS.indexOf(level) <= settings.LOG_LEVELS.indexOf(nsLevel)) {
+            const message: string = messageOrLambda instanceof Function ? messageOrLambda() : messageOrLambda;
             this.logger.log(level, `${namespace}: ${message}`);
         }
     }
 
-    public error(message: string, namespace: string = 'z2m'): void {
-        this.log('error', message, namespace);
+    public error(messageOrLambda: string | (() => string), namespace: string = 'z2m'): void {
+        this.log('error', messageOrLambda, namespace);
     }
 
-    public warning(message: string, namespace: string = 'z2m'): void {
-        this.log('warning', message, namespace);
+    public warning(messageOrLambda: string | (() => string), namespace: string = 'z2m'): void {
+        this.log('warning', messageOrLambda, namespace);
     }
 
-    public info(message: string, namespace: string = 'z2m'): void {
-        this.log('info', message, namespace);
+    public info(messageOrLambda: string | (() => string), namespace: string = 'z2m'): void {
+        this.log('info', messageOrLambda, namespace);
     }
 
-    public debug(message: string, namespace: string = 'z2m'): void {
+    public debug(messageOrLambda: string | (() => string), namespace: string = 'z2m'): void {
         if (this.debugNamespaceIgnoreRegex?.test(namespace)) {
             return;
         }
 
-        this.log('debug', message, namespace);
+        this.log('debug', messageOrLambda, namespace);
     }
 
     // Cleanup any old log directory.
-    public cleanup(): void {
+    private cleanup(): void {
         if (settings.get().advanced.log_directory.includes('%TIMESTAMP%')) {
             const rootDirectory = path.join(this.directory, '..');
 
@@ -231,7 +240,7 @@ class Logger {
 
     // Workaround for https://github.com/winstonjs/winston/issues/1629.
     // https://github.com/Koenkk/zigbee2mqtt/pull/10905
-    /* istanbul ignore next */
+    /* v8 ignore start */
     public async end(): Promise<void> {
         this.logger.end();
 
@@ -250,6 +259,7 @@ class Logger {
             }
         });
     }
+    /* v8 ignore stop */
 }
 
 export default new Logger();
