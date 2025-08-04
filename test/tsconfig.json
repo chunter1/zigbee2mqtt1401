@@ -2,6 +2,7 @@
     "extends": "../tsconfig",
     "include": ["./**/*", "vitest.config.mts"],
     "compilerOptions": {
+        "types": ["vitest/globals"],
         "rootDir": "..",
         "noEmit": true
     },

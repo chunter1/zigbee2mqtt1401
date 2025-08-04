@@ -1,4 +1,4 @@
-name: Merge master to dev
+name: merge-master-to-dev
 
 on:
     push:
@@ -6,7 +6,7 @@ on:
             - master
 
 jobs:
-    merge-master-to-dev:
+    merge_master_to_dev:
         runs-on: ubuntu-latest
         steps:
             - uses: actions/checkout@v4

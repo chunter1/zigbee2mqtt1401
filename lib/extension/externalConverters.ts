@@ -1,16 +1,16 @@
-import type {ExternalDefinitionWithExtend} from "zigbee-herdsman-converters";
+import type * as zhc from 'zigbee-herdsman-converters';
 
-import {addExternalDefinition, removeExternalDefinitions} from "zigbee-herdsman-converters";
+import {addDefinition, removeExternalDefinitions} from 'zigbee-herdsman-converters';
 
-import logger from "../util/logger";
-import ExternalJSExtension from "./externalJS";
+import logger from '../util/logger';
+import ExternalJSExtension from './externalJS';
 
-type TModule = ExternalDefinitionWithExtend | ExternalDefinitionWithExtend[];
+type ModuleExports = zhc.Definition | zhc.Definition[];
 
-export default class ExternalConverters extends ExternalJSExtension<TModule> {
+export default class ExternalConverters extends ExternalJSExtension<ModuleExports> {
     constructor(
         zigbee: Zigbee,
-        mqtt: Mqtt,
+        mqtt: MQTT,
         state: State,
         publishEntityState: PublishEntityState,
         eventBus: EventBus,
@@ -27,41 +27,42 @@ export default class ExternalConverters extends ExternalJSExtension<TModule> {
             enableDisableExtension,
             restartCallback,
             addExtension,
-            "converter",
-            "external_converters",
+            'converter',
+            'external_converters',
         );
     }
 
-    protected async removeJS(name: string, _mod: TModule): Promise<void> {
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    protected async removeJS(name: string, module: ModuleExports): Promise<void> {
         removeExternalDefinitions(name);
 
         await this.zigbee.resolveDevicesDefinitions(true);
     }
 
-    protected async loadJS(name: string, mod: TModule, newName?: string): Promise<void> {
+    protected async loadJS(name: string, module: ModuleExports): Promise<void> {
         try {
             removeExternalDefinitions(name);
 
-            const definitions = Array.isArray(mod) ? mod : [mod];
+            for (const definition of this.getDefinitions(module)) {
+                definition.externalConverterName = name;
 
-            for (const definition of definitions) {
-                definition.externalConverterName = newName ?? name;
-
-                addExternalDefinition(definition);
-                logger.info(`Loaded external converter '${newName ?? name}'.`);
+                addDefinition(definition);
+                logger.info(`Loaded external converter '${name}'.`);
             }
 
             await this.zigbee.resolveDevicesDefinitions(true);
         } catch (error) {
+            logger.error(`Failed to load external converter '${name}'`);
+            logger.error(`Check the code for syntax error and make sure it is up to date with the current Zigbee2MQTT version.`);
             logger.error(
-                /* v8 ignore next */
-                `Failed to load external converter '${newName ?? name}'. Check the code for syntax error and make sure it is up to date with the current Zigbee2MQTT version.`,
-            );
-            logger.warning(
-                "External converters are not meant for long term usage, but for local testing after which a pull request should be created to add out-of-the-box support for the device",
+                `External converters are not meant for long term usage, but for local testing after which a pull request should be created to add out-of-the-box support for the device`,
             );
 
             throw error;
         }
+    }
+
+    private getDefinitions(module: ModuleExports): zhc.Definition[] {
+        return Array.isArray(module) ? module : [module];
     }
 }

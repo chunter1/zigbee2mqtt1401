@@ -1,17 +1,16 @@
-import type * as zhc from "zigbee-herdsman-converters";
-import * as settings from "../util/settings";
-import {DEFAULT_BIND_GROUP_ID} from "../util/utils";
+import * as zhc from 'zigbee-herdsman-converters';
+
+import * as settings from '../util/settings';
 
 export default class Group {
     public zh: zh.Group;
     private resolveDevice: (ieeeAddr: string) => Device | undefined;
 
-    // biome-ignore lint/style/useNamingConvention: API
     get ID(): number {
         return this.zh.groupID;
     }
     get options(): GroupOptions {
-        // biome-ignore lint/style/noNonNullAssertion: Group always exists in settings
+        // XXX: Group always exists in settings
         return {...settings.getGroup(this.ID)!};
     }
     get name(): string {
@@ -23,24 +22,12 @@ export default class Group {
         this.resolveDevice = resolveDevice;
     }
 
-    ensureInSettings(): void {
-        if (this.ID !== DEFAULT_BIND_GROUP_ID && !settings.getGroup(this.ID)) {
-            settings.addGroup(this.name, this.ID.toString());
-        }
-    }
-
     hasMember(device: Device): boolean {
         return !!device.zh.endpoints.find((e) => this.zh.members.includes(e));
     }
 
-    *membersDevices(): Generator<Device> {
-        for (const member of this.zh.members) {
-            const resolvedDevice = this.resolveDevice(member.deviceIeeeAddress);
-
-            if (resolvedDevice) {
-                yield resolvedDevice;
-            }
-        }
+    membersDevices(): Device[] {
+        return this.zh.members.map((d) => this.resolveDevice(d.getDevice().ieeeAddr)!);
     }
 
     membersDefinitions(): zhc.Definition[] {

@@ -2,11 +2,11 @@ on:
     repository_dispatch:
         types: update_dep
 
-name: Update dependency
+name: update-dep
 
 permissions: {}
 jobs:
-    update-dependency:
+    update_dep:
         permissions:
             contents: write
             pull-requests: write
@@ -20,7 +20,7 @@ jobs:
             - uses: pnpm/action-setup@v4
             - uses: actions/setup-node@v4
               with:
-                  node-version: 24
+                  node-version: 20
                   cache: pnpm
             - run: |
                   pnpm install ${{ github.event.client_payload.package }}@${{ github.event.client_payload.version }} --save-exact

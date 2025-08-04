@@ -1,55 +1,30 @@
-import fs from "node:fs";
-import bind from "bind-decorator";
-import type {IClientOptions, IClientPublishOptions, MqttClient} from "mqtt";
-import {connectAsync} from "mqtt";
-import type {Zigbee2MQTTAPI} from "./types/api";
+import type {IClientOptions, IClientPublishOptions, MqttClient} from 'mqtt';
 
-import logger from "./util/logger";
-import * as settings from "./util/settings";
-import utils from "./util/utils";
+import type {Zigbee2MQTTAPI} from './types/api';
 
-const NS = "z2m:mqtt";
+import fs from 'node:fs';
 
-export interface MqttPublishOptions {
-    clientOptions: IClientPublishOptions;
-    baseTopic: string;
-    skipLog: boolean;
-    skipReceive: boolean;
-    meta: {isEntityState?: boolean};
-}
+import bind from 'bind-decorator';
+import {connectAsync} from 'mqtt';
 
-export default class Mqtt {
-    private publishedTopics = new Set<string>();
+import logger from './util/logger';
+import * as settings from './util/settings';
+import utils from './util/utils';
+
+const NS = 'z2m:mqtt';
+
+export default class MQTT {
+    private publishedTopics: Set<string> = new Set();
     private connectionTimer?: NodeJS.Timeout;
     private client!: MqttClient;
     private eventBus: EventBus;
     private republishRetainedTimer?: NodeJS.Timeout;
-    private defaultPublishOptions: MqttPublishOptions;
-    public retainedMessages: {[s: string]: {topic: string; payload: string; options: MqttPublishOptions}} = {};
-
-    get info() {
-        return {
-            version: this.client.options.protocolVersion,
-            server: `${this.client.options.protocol}://${this.client.options.host}:${this.client.options.port}`,
-        };
-    }
-
-    get stats() {
-        return {
-            connected: this.isConnected(),
-            queued: this.client.queue.length,
-        };
-    }
+    public retainedMessages: {
+        [s: string]: {payload: string; options: IClientPublishOptions; skipLog: boolean; skipReceive: boolean; topic: string; base: string};
+    } = {};
 
     constructor(eventBus: EventBus) {
         this.eventBus = eventBus;
-        this.defaultPublishOptions = {
-            clientOptions: {},
-            baseTopic: settings.get().mqtt.base_topic,
-            skipLog: false,
-            skipReceive: true,
-            meta: {},
-        };
     }
 
     async connect(): Promise<void> {
@@ -60,8 +35,8 @@ export default class Mqtt {
         const options: IClientOptions = {
             will: {
                 topic: `${settings.get().mqtt.base_topic}/bridge/state`,
-                payload: Buffer.from(JSON.stringify({state: "offline"})),
-                retain: !settings.get().mqtt.force_disable_retain,
+                payload: Buffer.from(JSON.stringify({state: 'offline'})),
+                retain: settings.get().mqtt.force_disable_retain ? false : true,
                 qos: 1,
             },
             properties: {maximumPacketSize: mqttSettings.maximum_packet_size},
@@ -96,7 +71,7 @@ export default class Mqtt {
             logger.debug(`Using MQTT login with username only: ${mqttSettings.user}`);
             options.username = mqttSettings.user;
         } else {
-            logger.debug("Using MQTT anonymous login");
+            logger.debug(`Using MQTT anonymous login`);
         }
 
         if (mqttSettings.client_id) {
@@ -105,7 +80,7 @@ export default class Mqtt {
         }
 
         if (mqttSettings.reject_unauthorized !== undefined && !mqttSettings.reject_unauthorized) {
-            logger.debug("MQTT reject_unauthorized set false, ignoring certificate warnings.");
+            logger.debug(`MQTT reject_unauthorized set false, ignoring certificate warnings.`);
             options.rejectUnauthorized = false;
         }
 
@@ -114,34 +89,34 @@ export default class Mqtt {
         // https://github.com/Koenkk/zigbee2mqtt/issues/9822
         this.client.stream.setMaxListeners(0);
 
-        this.client.on("error", (err) => {
+        this.client.on('error', (err) => {
             logger.error(`MQTT error: ${err.message}`);
         });
 
-        if (mqttSettings.version != null && mqttSettings.version >= 5) {
-            this.client.on("disconnect", (packet) => {
+        if (mqttSettings.version != undefined && mqttSettings.version >= 5) {
+            this.client.on('disconnect', (packet) => {
                 logger.error(`MQTT disconnect: reason ${packet.reasonCode} (${packet.properties?.reasonString})`);
             });
         }
 
-        this.client.on("message", this.onMessage);
+        this.client.on('message', this.onMessage);
 
         await this.onConnect();
 
-        this.client.on("connect", this.onConnect);
+        this.client.on('connect', this.onConnect);
 
         this.republishRetainedTimer = setTimeout(async () => {
             // Republish retained messages in case MQTT broker does not persist them.
             // https://github.com/Koenkk/zigbee2mqtt/issues/9629
             for (const msg of Object.values(this.retainedMessages)) {
-                await this.publish(msg.topic, msg.payload, msg.options);
+                await this.publish(msg.topic, msg.payload, msg.options, msg.base, msg.skipLog, msg.skipReceive);
             }
         }, 2000);
 
         // Set timer at interval to check if connected to MQTT server.
         this.connectionTimer = setInterval(() => {
             if (!this.isConnected()) {
-                logger.error("Not connected to MQTT server!");
+                logger.error('Not connected to MQTT server!');
             }
         }, utils.seconds(10));
     }
@@ -150,11 +125,11 @@ export default class Mqtt {
         clearTimeout(this.connectionTimer);
         clearTimeout(this.republishRetainedTimer);
 
-        const stateData: Zigbee2MQTTAPI["bridge/state"] = {state: "offline"};
+        const stateData: Zigbee2MQTTAPI['bridge/state'] = {state: 'offline'};
 
-        await this.publish("bridge/state", JSON.stringify(stateData), {clientOptions: {retain: true}});
+        await this.publish('bridge/state', JSON.stringify(stateData), {retain: true, qos: 0});
         this.eventBus.removeListeners(this);
-        logger.info("Disconnecting from MQTT server");
+        logger.info('Disconnecting from MQTT server');
         await this.client?.endAsync();
     }
 
@@ -167,11 +142,11 @@ export default class Mqtt {
     }
 
     @bind private async onConnect(): Promise<void> {
-        logger.info("Connected to MQTT server");
+        logger.info('Connected to MQTT server');
 
-        const stateData: Zigbee2MQTTAPI["bridge/state"] = {state: "online"};
+        const stateData: Zigbee2MQTTAPI['bridge/state'] = {state: 'online'};
 
-        await this.publish("bridge/state", JSON.stringify(stateData), {clientOptions: {retain: true, qos: 1}});
+        await this.publish('bridge/state', JSON.stringify(stateData), {retain: true, qos: 0});
         await this.subscribe(`${settings.get().mqtt.base_topic}/#`);
     }
 
@@ -193,51 +168,54 @@ export default class Mqtt {
         return this.client && !this.client.reconnecting && !this.client.disconnecting && !this.client.disconnected;
     }
 
-    async publish(topic: string, payload: string, options: Partial<MqttPublishOptions> = {}): Promise<void> {
-        if (topic.includes("+") || topic.includes("#")) {
-            // https://github.com/Koenkk/zigbee2mqtt/issues/26939#issuecomment-2772309646
-            logger.error(`Topic '${topic}' includes wildcard characters, skipping publish.`);
-            return;
-        }
+    async publish(
+        topic: string,
+        payload: string,
+        options: IClientPublishOptions = {},
+        base = settings.get().mqtt.base_topic,
+        skipLog = false,
+        skipReceive = true,
+    ): Promise<void> {
+        const defaultOptions = {qos: 0 as const, retain: false};
+        topic = `${base}/${topic}`;
 
-        const finalOptions = {...this.defaultPublishOptions, ...options};
-        topic = `${finalOptions.baseTopic}/${topic}`;
-
-        if (finalOptions.skipReceive) {
+        if (skipReceive) {
             this.publishedTopics.add(topic);
         }
 
-        if (finalOptions.clientOptions.retain) {
+        if (options.retain) {
             if (payload) {
-                this.retainedMessages[topic] = {payload, options: finalOptions, topic: topic.substring(finalOptions.baseTopic.length + 1)};
+                this.retainedMessages[topic] = {payload, options, skipReceive, skipLog, topic: topic.substring(base.length + 1), base};
             } else {
                 delete this.retainedMessages[topic];
             }
         }
 
-        this.eventBus.emitMQTTMessagePublished({topic, payload, options: finalOptions});
+        this.eventBus.emitMQTTMessagePublished({topic, payload, options: {...defaultOptions, ...options}});
 
         if (!this.isConnected()) {
-            if (!finalOptions.skipLog) {
-                logger.error("Not connected to MQTT server!");
+            if (!skipLog) {
+                logger.error(`Not connected to MQTT server!`);
                 logger.error(`Cannot send message: topic: '${topic}', payload: '${payload}`);
             }
+
             return;
         }
 
-        let clientOptions: IClientPublishOptions = finalOptions.clientOptions;
-        if (settings.get().mqtt.force_disable_retain) {
-            clientOptions = {...finalOptions.clientOptions, retain: false};
-        }
-
-        if (!finalOptions.skipLog) {
+        if (!skipLog) {
             logger.info(() => `MQTT publish: topic '${topic}', payload '${payload}'`, NS);
         }
 
+        const actualOptions: IClientPublishOptions = {...defaultOptions, ...options};
+
+        if (settings.get().mqtt.force_disable_retain) {
+            actualOptions.retain = false;
+        }
+
         try {
-            await this.client.publishAsync(topic, payload, clientOptions);
+            await this.client.publishAsync(topic, payload, actualOptions);
         } catch (error) {
-            if (!finalOptions.skipLog) {
+            if (!skipLog) {
                 logger.error(`MQTT server error: ${(error as Error).message}`);
                 logger.error(`Could not send message: topic: '${topic}', payload: '${payload}`);
             }
